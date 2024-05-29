@@ -12,6 +12,7 @@
 // =========================
 #include <stdio.h>
 #include <stdlib.h>
+#include <iostream>
 
 // =========================
 // CUDA imports
@@ -19,267 +20,239 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
-// =========================
-// OpenMP imports
-// =========================
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include <cutlass/cutlass.h>
+#include <cutlass/numeric_types.h>
+#include <cutlass/core_io.h>
+#include <cutlass/array.h>
+#include <cutlass/gemm/device/gemm.h>
+#include <cutlass/util/host_tensor.h>
 
-// =========================
-// our imports
-// =========================
-#include "my_cuda_utils.h"
-#include "cuda_error.h"
-#include "SimpleTimer.h"
-#include "OpenMPTimer.h"
-#include "CudaTimer.h"
+#include <cutlass/layout/matrix.h>
+#include <cutlass/util/reference/host/tensor_fill.h>
+#include <cutlass/util/reference/device/tensor_fill.h>
+#include <cutlass/util/host_tensor.h>
+#include <cutlass/util/tensor_view_io.h>
 
-// =========================
-// global variables and configuration section
-// =========================
+#include <cutlass/numeric_types.h>
+#include <cutlass/layout/matrix.h>
 
-// number of repetitions of the timing loop
-// (CPU timers only have a ~ms resolution)
-static int numTimingReps = 100;
+#include <cutlass/util/host_tensor.h>
+#include <cutlass/util/reference/host/gemm.h>
 
+int gemm() {
 
-// =========================
-// kernel function (CPU) - serial
-// =========================
-void saxpy_serial(int n, float alpha, const float *x, float *y)
-{
+  // Define the GEMM operation
+  using Gemm = cutlass::gemm::device::Gemm<
+    cutlass::half_t,                           // ElementA
+    cutlass::layout::ColumnMajor,              // LayoutA
+    cutlass::half_t,                           // ElementB
+    cutlass::layout::ColumnMajor,              // LayoutB
+    cutlass::half_t,                           // ElementOutput
+    cutlass::layout::ColumnMajor,              // LayoutOutput
+    float,                                     // ElementAccumulator
+    cutlass::arch::OpClassTensorOp,            // tag indicating Tensor Cores
+    cutlass::arch::Sm80                       // tag indicating target GPU compute architecture
+  >;
 
-  for (size_t i=0; i<n; i++)
-    y[i] = alpha*x[i] + y[i];
+  Gemm gemm_op;
+  cutlass::Status status;
+
+  //
+  // Define the problem size
+  //
+  int M = 512;
+  int N = 256;
+  int K = 128;
+
+  float alpha = 1.25f;
+  float beta = -1.25f;
+
+  //
+  // Allocate device memory
+  //
+
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> A({M, K});
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> B({K, N});
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> C({M, N});
+
+  cutlass::half_t const *ptrA = A.device_data();
+  cutlass::half_t const *ptrB = B.device_data();
+  cutlass::half_t const *ptrC = C.device_data();
+  cutlass::half_t       *ptrD = C.device_data();
+
+  int lda = A.device_ref().stride(0);
+  int ldb = B.device_ref().stride(0);
+  int ldc = C.device_ref().stride(0);
+  int ldd = C.device_ref().stride(0);
+  //
+  // Launch GEMM on the device
+  //
+ 
+  status = gemm_op({
+    {M, N, K},
+    {ptrA, lda},            // TensorRef to A device tensor
+    {ptrB, ldb},            // TensorRef to B device tensor
+    {ptrC, ldc},            // TensorRef to C device tensor
+    {ptrD, ldd},            // TensorRef to D device tensor - may be the same as C
+    {alpha, beta}           // epilogue operation arguments
+  });
+
+  if (status != cutlass::Status::kSuccess) {
+    return -1;
+  }
+
+  return 0;
 }
 
-// =========================
-// kernel function (CPU) - OpenMP
-// =========================
-void saxpy_openmp(int n, float alpha,
-                  const float * x, float * y)
-{
 
-  #pragma omp parallel for
-  #pragma ivdep
-  for (size_t i=0; i<n; i++)
-    y[i] = alpha*x[i] + y[i];
+__global__ void kernel(cutlass::half_t x){
+  printf("device: %f \n",x*2);
+}
+
+void test_type(){
+  cutlass::half_t x=0.5_hf;
+  //std::cin>>x;
+  std::cout<<"Host: "<<2.0_hf*x<<std::endl;
+  kernel<<<dim3(1,1),dim3(1,1,1)>>>(x);
+
+  cudaError_t status=cudaDeviceSynchronize();
+
 }
 
 
-// =========================
-// kernel function (CUDA device)
-// =========================
-__global__ void saxpy_cuda(int n, float alpha, const float *x, float *y)
-{
-  // compute the global index in the vector from
-  // the number of the current block, blockIdx,
-  // the number of threads per block, blockDim,
-  // and the number of the current thread within the block, threadIdx
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+void test_arr(){
 
-  // except for special cases, the total number of threads in all blocks
-  // adds up to more than the vector length n, so this conditional is
-  // EXTREMELY important to avoid writing past the allocated memory for
-  // the vector y.
-  if (i<n)
-    y[i] = alpha*x[i] + y[i];
+  // cutlass::Array<cutlass::half_t, 3> elements;
+  cutlass::Array<float, 3> elements;
+  elements[0]=3;
+  elements[1]=9;
+  elements[2]=87;
+  CUTLASS_PRAGMA_UNROLL                        // required to ensure array remains in registers
+  for (auto x : elements) {
+    printf("%d, %f \n", int64_t(x), double(x));   // explictly convert to int64_t or double
+  }
+
 }
 
+
+void multi_add(){
+  static int const kN=8;
+  using namespace cutlass;
+  using namespace std;
+
+  std::array<float,9> arr;
+
+  // for(std::array<float,9>::iterator itr=arr.begin();itr<arr.end();itr++){
+  //   *itr=9;
+  //   cout<<"*itr: "<<*itr<<endl;
+  // }
+
+  Array<half_t,kN> a;
+  Array<half_t,kN> b;
+  Array<half_t,kN> c;
+  Array<half_t,kN> d;
+  
+  for(auto itr=a.begin();itr!=a.end();itr++){
+    cout<<"*itr: "<<*itr<<endl;
+  }
+  
+  multiply_add<Array<half_t,kN>> mad_op;
+  d=mad_op(a,b,c);
+
+  for(auto i :d){
+
+    cout<<"i: "<<i<<endl;
+  }
+
+}
+
+void test_tensor(){
+  using namespace std;
+  using namespace cutlass;
+
+  int rows =3;
+  int columns=3;
+  float x=3.14;
+
+  // fill 
+  HostTensor<float,layout::ColumnMajor> tensor({rows,columns});
+  reference::host::TensorFill(tensor.host_view(),x);
+  cutlass::TensorView<float, cutlass::layout::ColumnMajor> view = tensor.host_view();
+  std::cout<<view<<endl;
+
+  // write at {i,j}
+  float idx=0;
+  for (int i = 0; i < rows; ++i) {
+    for (int j = 0; j < columns; ++j) {
+
+      // Write the element at location {i, j} in host memory
+      tensor.host_ref().at({i, j}) = idx;
+
+      idx += 0.5f;
+    } 
+  }
+
+  // copy host mem to device mem
+  tensor.sync_device();
+
+  std::cout<<view<<endl;
+  float *device_ptr = tensor.device_data();
+
+}
+
+
+void test_tensor_gemm(){
+
+
+  int M = 6;
+  int N = 3;
+  int K = 2;
+
+  float alpha = 2.0f; //1.5f;
+  float beta = -3.0f; //-1.25f;
+
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> A({M, K});
+  cutlass::reference::host::TensorFill(A.host_view(),1_hf);
+
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> B({K, N});
+    cutlass::reference::host::TensorFill(B.host_view(),2_hf);
+
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> C({M, N});
+  cutlass::HostTensor<cutlass::half_t, cutlass::layout::ColumnMajor> D({M, N});
+
+  cutlass::reference::host::Gemm<
+    cutlass::half_t, cutlass::layout::ColumnMajor,   // ElementA and LayoutA
+    cutlass::half_t, cutlass::layout::ColumnMajor,   // ElementB and LayoutB
+    cutlass::half_t, cutlass::layout::ColumnMajor,   // ElementC and LayoutC
+    float,                                           // scalar type (alpha and beta)
+    float> gemm_op;                                  // internal accumulation type
+
+  gemm_op(
+    {M, N, K},             // problem size
+    alpha,                 // alpha scalar
+    A.host_view(),         // TensorView to host memory
+    B.host_view(),         // TensorView to host memory
+    beta,                  // beta scalar
+    C.host_view(),         // TensorView to host memory
+    D.host_view());        // TensorView to device memory
+
+
+  cutlass::TensorView<cutlass::half_t, cutlass::layout::ColumnMajor> view=D.host_view();
+
+  std::cout<<"D: \n"<<view;
+
+}
 
 // =========================
 // main routine
 // =========================
 int main (int argc, char **argv)
 {
-
-  // problem size (vector length) N
-  //size_t N = 1234567;
-  size_t N = 1<<22;
-  //size_t N = 40000;
-
-  if (argc>1)
-    N = atoi(argv[1]);
-
-
-  SimpleTimer cpuTimer;
-  OpenMPTimer ompTimer;
-  CudaTimer   gpuTimer;
-
-#ifdef _OPENMP
-#pragma omp parallel
-  {
-#pragma omp single
-    printf("Using %d OpenMP threads\n",omp_get_num_threads());
-  }
-#else
-  printf("OpenMP not activated\n");
-#endif
-
-  // =========================
-  // (1) initialisations:
-  //     implemented in my_cuda_utils.c
-  // =========================
-  initCuda(0);
-
-
-  // =========================
-  // (2) allocate memory on host (main CPU memory) and device,
-  //     h_ denotes data residing on the host, d_ on device
-  // =========================
-  float *h_x = (float*)malloc(N*sizeof(float));
-  float *h_y = (float*)malloc(N*sizeof(float));
-  float *d_x;
-  CUDA_API_CHECK( cudaMalloc((void**)&d_x, N*sizeof(float)) );
-  float *d_y;
-  CUDA_API_CHECK( cudaMalloc((void**)&d_y, N*sizeof(float)) );
-
-
-  // =========================
-  // (3) initialise data on the CPU
-  // =========================
-#pragma omp parallel for
-  for (size_t i=0; i<N; i++)
-  {
-    h_x[i] = 1.0f + i;
-    h_y[i] = (float)(N-i+1);
-  }
-
-
-  // =========================
-  // (4) copy data to device
-  // =========================
-  CUDA_API_CHECK( cudaMemcpy(d_x, h_x, N*sizeof(float), cudaMemcpyHostToDevice) );
-  CUDA_API_CHECK( cudaMemcpy(d_y, h_y, N*sizeof(float), cudaMemcpyHostToDevice) );
-
-
-  // =========================
-  // (5a) perform computation on host - SERIAL
-  //     use our straight forward code
-  //     and our utility functions to time everything,
-  //     note that gettimeofday has ~ms resolution, so
-  //     perform everything in a loop to minimise
-  //     timing noise
-  // =========================
-  float alpha = 2.0;
-  cpuTimer.start();
-  for (int iter=0; iter<numTimingReps; iter++)
-    saxpy_serial(N, alpha, h_x, h_y);
-  cpuTimer.stop();
-  double elapsed = cpuTimer.elapsed();
-  printf("CPU CODE (Serial): %8ld elements, %10.6f ms per iteration, %6.3f GFLOP/s, %7.3f GB/s\n",
-         N,
-         (elapsed*1000.0)/(double)numTimingReps,
-         2.0*N*numTimingReps / (elapsed*1e9),
-         3.0*N*sizeof(float)*numTimingReps / (elapsed*1e9) );
-
-  // =========================
-  // (5b) perform computation on host - OpenMP
-  // =========================
-  ompTimer.start();
-  for (int iter=0; iter<numTimingReps; iter++)
-    saxpy_openmp(N, alpha, h_x, h_y);
-  ompTimer.stop();
-  elapsed = ompTimer.elapsed();
-  printf("CPU CODE (OpenMP): %8ld elements, %10.6f ms per iteration, %6.3f GFLOP/s, %7.3f GB/s\n",
-         N,
-         (elapsed*1000.0)/(double)numTimingReps,
-         2.0*N*numTimingReps / (elapsed*1e9),
-         3.0*N*sizeof(float)*numTimingReps / (elapsed*1e9) );
-
-
-  // =========================
-  // (7) perform computation on device, our implementation
-  //     use CUDA events to time the execution:
-  //     (a) insert "tag" into instruction stream
-  //     (b) execute kernel
-  //     (c) insert another tag into instruction stream
-  //     (d) synchronize (ie, wait for) this tag (event)
-  //     CUDA events have a resolution of ~0.5us
-  // =========================
-  float time;
-
-  // Mapping onto the device:
-  // - each thread computes one element of the output array in situ
-  // - all threads and blocks are independent
-  // - use 256 threads per block
-  // - use as many blocks as necessary (the last block is not entirely
-  //   full if n is not a multiple of 256)
-  int numThreadsPerBlock = 128;
-  int numBlocks = (N+numThreadsPerBlock-1) / numThreadsPerBlock;
-
-  gpuTimer.start();
-  saxpy_cuda<<<numBlocks, numThreadsPerBlock>>>(N, alpha, d_x, d_y);
-  CUDA_KERNEL_CHECK("saxpy_cuda");
-  gpuTimer.stop();
-  time = gpuTimer.elapsed();
-  printf("GPU CODE (CUDA)  : %8ld elements, %10.6f ms per iteration, %6.3f GFLOP/s, %7.3f GB/s\n",
-         N,
-         time*1000,
-         2.0*N / (time*1e9),
-         3.0*N*sizeof(float) / (time*1e9) );
-
-
-  // =========================
-  // (8) read back result from device into temp vector
-  // =========================
-  float *h_z = (float*)malloc(N*sizeof(float));
-  CUDA_API_CHECK( cudaMemcpy(h_z, d_y, N*sizeof(float), cudaMemcpyDeviceToHost) );
-
-
-  // =========================
-  // (9) perform computation on device, CUBLAS
-  // =========================
-  cublasHandle_t handle;
-  auto status = cublasCreate(&handle);
-
-  gpuTimer.reset();
-  gpuTimer.start();
-  cublasSaxpy(handle, N, &alpha, d_x, 1, d_y, 1);
-  gpuTimer.stop();
-  time = gpuTimer.elapsed();
-
-  cublasDestroy(handle);
-
-  printf("GPU CODE (CUBLAS): %8ld elements, %10.6f ms per iteration, %6.3f GFLOP/s, %7.3f GB/s\n",
-         N,
-         time*1000,
-         2.0*N / (time*1e9),
-         3.0*N*sizeof(float) / (time*1e9) );
-
-
-  // =========================
-  // (10) perform result comparison
-  //      we need to re-run the CPU code because
-  //      it has been executed 1000 times before
-  // =========================
-  int errorCount = 0;
-  for (size_t i=0; i<N; i++)
-  {
-    h_x[i] = 1.0f + i;
-    h_y[i] = (float)(N-i+1);
-  }
-  saxpy_serial(N, alpha, h_x, h_y);
-  for (size_t i=0; i<N; i++)
-  {
-    if (abs(h_y[i]-h_z[i]) > 1e-6)
-      errorCount = errorCount + 1;
-  }
-  if (errorCount > 0)
-    printf("Result comparison failed.\n");
-  else
-    printf("Result comparison passed.\n");
-
-
-  // =========================
-  // (11) clean up, free memory
-  // =========================
-  free(h_x);
-  free(h_y);
-  free(h_z);
-  cudaFree(d_x);
-  cudaFree(d_y);
-
-  return EXIT_SUCCESS;
+  //gemm();
+  //test_type();
+  //test_arr();
+  //multi_add();
+  //test_tensor();
+  test_tensor_gemm();
+  return 0;
 }
