@@ -17,6 +17,8 @@ else()
     cmake_policy(SET CMP0104 NEW)
 endif()
 
+message("******CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+
 project(cuda-proj-tmpl LANGUAGES CXX C)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
@@ -25,20 +27,24 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
   endif()
 endif()
 
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+###### tzq added
 set(CMAKE_CUDA_STANDARD 17)
-list(APPEND CUTLASS_CUDA_NVCC_FLAGS --std=c++17)
-
+######
 
 # custom cmake macros location
+
+message("****** INSERT CMAKE_MODULE_PATH  to find cuda libs cmake")
+
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+message("${CMAKE_MODULE_PATH}")
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cuda")
+message("${CMAKE_MODULE_PATH}")
+
+message("****** Done insert")
 
 # Prevent from build in source tree
 include(preventBuildInSource)
+#prevent_build_in_source()
 
 # Init build type: Release, Debug, ...
 include(initBuildType)
@@ -73,22 +79,20 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # other third party libraries
 find_package(OpenMP)
-#find_package(OpenGL)
-#find_package(GLUT)
 
 # we also need extra stuff to make sure compile flags are correctly
 # passed to nvcc / host compiler
+include(tzq_test)
 include(protect_nvcc_flags)
 include(protect_pthread_flag)
 
-##########################################################
-##########################################################
-##########################################################
+
 ##########################################################
 
 # build some executable
+message("******** add subdir src")
 add_subdirectory(src)
-
+message("******** done add subdir src")
 # Testing
 #enable_testing()
 

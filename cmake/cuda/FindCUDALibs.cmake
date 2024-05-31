@@ -14,10 +14,14 @@
 #       check_language(CUDA)
 #       if (NOT CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES)
 #       --> then we cannot win?
+
+message("1111111111CUDA_TOOLKIT_ROOT_DIR")
+
 find_package(CUDA REQUIRED)
 
 # Populate the list of default locations to search for the CUDA libraries.
 # TODO: allow user bypass of this?
+
 list(APPEND CUDALibs_HINTS "${CUDA_TOOLKIT_ROOT_DIR}/lib64")
 list(APPEND CUDALibs_HINTS "${CUDA_TOOLKIT_ROOT_DIR}/lib")
 list(APPEND CUDALibs_HINTS "${CUDA_TOOLKIT_ROOT_DIR}")

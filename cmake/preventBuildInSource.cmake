@@ -5,6 +5,9 @@ function(prevent_build_in_source)
   get_filename_component(bindir "${CMAKE_BINARY_DIR}" REALPATH)
 
   # disallow in-source builds
+
+  message("11111111111 srcdir:  ${srcdir}")
+
   if("${srcdir}" STREQUAL "${bindir}")
     message("######################################################")
     message("# ${PROJECT_NAME} should not be configured and built in the source directory")
