@@ -54,8 +54,7 @@ void ds_kernel(){
   cudaStream_t stream;
   //Flash_
   using elem_type = cutlass::half_t;
-  //run_flash_fwd<Flash_fwd_kernel_traits<32, 128, 128, 4, false, false, elem_type>,false>(*ffp,stream);
-  run_mha_fwd(*ffp,stream);
+  //run_mha_fwd(*ffp,stream);
 
 }
 
