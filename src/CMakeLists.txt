@@ -2,6 +2,7 @@
 message("******** add subdir common")
 add_subdirectory(common)
 add_subdirectory(tzq)
+add_subdirectory(sum_kernels)
 message("******** done add subdir common")
 
 add_executable(saxpy_cuda "")
