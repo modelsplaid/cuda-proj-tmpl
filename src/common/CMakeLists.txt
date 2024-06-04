@@ -15,6 +15,7 @@ target_include_directories(cudaCommon
   PUBLIC
   "/data/tzq/DeepSpeed-Kernels/dskernels/inf_flash_attn/third_party/cutlass/include"
   "/data/tzq/DeepSpeed-Kernels/dskernels/inf_flash_attn/third_party/cutlass/tools/util/include"
+  "/data/tzq/DeepSpeed-Kernels/dskernels/inf_flash_attn/third_party/cutlass/examples/41_fused_multi_head_attention"
 )
 
 target_compile_options(cudaCommon PUBLIC
