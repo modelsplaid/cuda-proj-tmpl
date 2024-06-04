@@ -1,12 +1,3 @@
-/**
- * Compute saxpy
- * - on CPU : serial and OpenMP version
- * - on GPU : first using CUDA, then library CuBLAS
- *
- * compare timings.
- *
- */
-
 
 
 // =========================
@@ -117,7 +108,20 @@
 //#include <torch/extension.h>
 //#include "add2.h"
 
-Flash_fwd_params ffp;
+//Flash_fwd_params ffp;
+
+struct Atten_params{
+  Flash_fwd_params ffp;
+  int batch_size;
+  int seq_length;
+  int seq_length_kv;
+
+  
+};
+
+cudaStream_t stream;
+
+Atten_params  atten_params;
 
 /// Result structure
 struct Result {
@@ -140,7 +144,7 @@ struct Result {
   ):
     runtime_ms(runtime_ms), gflops(gflops), status(status), error(error), passed(true) { }
 };
-
+Result result;
 
 // Command line options parsing
 struct Options {
@@ -208,8 +212,6 @@ struct Options {
       return;
     }
 
-    //ffp
-
     cmd.get_cmd_line_argument("alignment", alignment, 1);
     cmd.get_cmd_line_argument("head_number", head_number, 12);
     cmd.get_cmd_line_argument("batch_size", batch_size, 16);
@@ -225,6 +227,12 @@ struct Options {
 
     std::vector<std::string> scheduler_mode_strs;
     cmd.get_cmd_line_arguments("scheduler-mode", scheduler_mode_strs);
+
+    atten_params.ffp.d = head_size;
+    atten_params.ffp.h = head_number;
+    atten_params.batch_size = batch_size;
+    atten_params.seq_length = seq_length;
+    atten_params.seq_length_kv = seq_length_kv;
 
     if (!scheduler_mode_strs.empty()) {
       if (scheduler_mode_strs.size() > 1) {
@@ -244,10 +252,6 @@ struct Options {
       }
     }
 
-    if (fixed_seq_length) {
-      std::cout << "NOTE: Better performance is expected for fixed-sized sequence length from 41_fused_multi_head_attention_fixed_seqlen." << std::endl;
-    }
-
     randomize_problems();
   }
 
@@ -265,7 +269,7 @@ struct Options {
       problem_sizes1_real.reserve(problem_count);
     }
 
-    for (int i = 0; i < batch_size; ++i) {
+    for (int i = 0; i < batch_size; ++i) { // loop over batch size
       // problems belonging to the same batch share the same seq len
 
       int m_real, mkv_real;
@@ -289,7 +293,7 @@ struct Options {
       int k0 = head_size;
       int k1 = head_size_v;
 
-      for (int j = 0; j < head_number; ++j) {
+      for (int j = 0; j < head_number; ++j) { // loop over head number
         cutlass::gemm::GemmCoord problem0(m, mkv, k0);
         cutlass::gemm::GemmCoord problem1(m, k1, mkv);
 
@@ -315,26 +319,6 @@ struct Options {
     }
   }
 
-  /// Prints the usage statement.
-  std::ostream & print_usage(std::ostream &out) const {
-
-    out << "41_fused_multi_head_attention_variable_seqlen\n\n"
-      << "Options:\n\n"
-      << "  --help                      If specified, displays this usage statement.\n\n"
-      << "  --head_number=<int>         Head number in multi-head attention (default: --head_number=12)\n"
-      << "  --batch_size=<int>          Batch size in multi-head attention (default: --batch_size=16)\n"
-      << "  --head_size=<int>           Head size in multi-head attention (default: --head_size=64)\n"
-      << "  --head_size_v=<int>         Head size in multi-head attention for V (default: --head_size_v=head_size)\n"
-      << "  --seq_length=<int>          Sequence length in multi-head attention for Q (default: --seq_length=1024)\n"
-      << "  --seq_length_kv=<int>       Sequence length in multi-head attention for K/V (default: --seq_length_kv=seq_length)\n"
-      << "  --use_mask=<bool>           If true, performs padding-like masking in softmax.\n"
-      << "  --iterations=<int>          Number of profiling iterations to perform.\n"
-      << "  --reference-check=<bool>    If true, performs reference check.\n"
-      << "  --causal=<bool>             If true, uses causal masking.\n"
-      << "  --fixed_seq_length=<bool>   If true, uses the same sequence length for each item in the batch.\n";
-
-    return out;
-  }
 
   /// Compute performance in GFLOP/s
   double gflops(double runtime_s) const {
@@ -667,6 +651,10 @@ private:
       }
     }
 
+    atten_params.ffp.k_ptr = ptr_K_host.data();
+    atten_params.ffp.q_ptr = ptr_Q_host.data();
+    atten_params.ffp.v_ptr = ptr_V_host.data();
+
     ptr_Q.reset(problem_count());
     ptr_Q.copy_from_host(ptr_Q_host.data());
     
@@ -883,8 +871,6 @@ private:
 
 public:
 
-
-  /// Executes a CUTLASS Attention kernel and measures runtime.
   Result profile() {
 
     Result result;
@@ -1039,14 +1025,14 @@ public:
     }
 
     std::cout << std::endl;
-    std::cout << " Attention kernel:\n"
-      << "====================================================" << std::endl;
-    std::cout << "    " << " {seq length Q, seq length KV, head size, head size V, head number, batch size} = {" << options.seq_length \
-      << ", " << options.seq_length_kv << ", " << options.head_size << ", " << options.head_size_v << ", " << options.head_number\
-      << ", " << options.batch_size << "}." << std::endl;
-    options.print_problems();
-    std::cout << std::endl;
-    std::cout << "    " << "Runtime: " << result.runtime_ms*1000 << " us" << std::endl;
+    // std::cout << " Attention kernel:\n"
+    //   << "====================================================" << std::endl;
+    // std::cout << "    " << " {seq length Q, seq length KV, head size, head size V, head number, batch size} = {" << options.seq_length \
+    //   << ", " << options.seq_length_kv << ", " << options.head_size << ", " << options.head_size_v << ", " << options.head_number\
+    //   << ", " << options.batch_size << "}." << std::endl;
+    // options.print_problems();
+    // std::cout << std::endl;
+    std::cout << " Attention kernel: " << "Runtime: " << result.runtime_ms*1000 << " us" << std::endl;
 
     return result;
   }
@@ -1111,10 +1097,8 @@ int run_attention(Options& options) {
 }
 
 void ds_kernel(Flash_fwd_params *ffp){
-  // todo: here
   
-  cudaStream_t stream;
-  //Flash_
+
   using elem_type = cutlass::half_t;
   run_mha_fwd(*ffp,stream);
 
@@ -1167,11 +1151,6 @@ int main (int argc, char const **args)
 
   options.parse(argc, args);
 
-  if (options.help) {
-    options.print_usage(std::cout) << std::endl;
-    return 0;
-  }
-
   if (options.error) {
     std::cerr << "Aborting execution." << std::endl;
     return -1;
@@ -1186,12 +1165,16 @@ int main (int argc, char const **args)
     return -2;
   }
 
-  // Determine kernel configuration based on head size.
-  // If head size is less than or equal to 64, each block operates over 64 queries and
-  // 64 keys, and partial results can be stored in the register file.
-  // If head size is greater than 64, each block operates over 32 queries and 128 keys,
-  // and partial results are stored in shared memory.
+
   if (options.head_size_v > 64) {
+    // Determine kernel configuration based on head size.
+    // If head size is less than or equal to 64,
+    // each block operates over 64 queries and
+    // 64 keys, and partial results can be stored
+    // in the register file.
+    // If head size is greater than 64, 
+    //each block operates over 32 queries and 128 keys,
+    // and partial results are stored in shared memory.
     static int const kQueriesPerBlock = 32;
     static int const kKeysPerBlock = 128;
     if (options.head_size_v <= kKeysPerBlock) {
@@ -1199,11 +1182,38 @@ int main (int argc, char const **args)
     } else {
       return run_attention<kQueriesPerBlock, kKeysPerBlock, false>(options);
     }
+
+    cudaEvent_t events[2];
+
+    for (auto & event : events) {
+      result.error = cudaEventCreate(&event);
+      if (result.error != cudaSuccess) {
+        std::cerr << "cudaEventCreate() failed: " << cudaGetErrorString(result.error) << std::endl;
+        return -1;
+      }
+    }
+
+    ds_kernel(&atten_params.ffp);
+
+    result.error = cudaEventRecord(events[0]);
+    if (result.error != cudaSuccess) {
+      std::cerr << "cudaEventRecord() failed: " << cudaGetErrorString(result.error) << std::endl;
+    }
+    float runtime_ms = 0;
+    result.error = cudaEventSynchronize(events[1]);
+    result.error = cudaEventElapsedTime(&runtime_ms, events[0], events[1]);
+      std::cout << "Runtime: " << result.runtime_ms*1000 << " us" << std::endl;
+
   } else {
     static int const kQueriesPerBlock = 64;
     static int const kKeysPerBlock = 64;
     return run_attention<kQueriesPerBlock, kKeysPerBlock, true>(options);
+    ds_kernel(&atten_params.ffp);
+    std::cout << "Runtime: " << result.runtime_ms*1000 << " us" << std::endl;
+
   }
+  
+  ds_kernel(&atten_params.ffp);
 
   return 0;
 }
