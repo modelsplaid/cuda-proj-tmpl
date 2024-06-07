@@ -3,3 +3,4 @@ build*
 .swp
 .run.sh.swp
 report1.nsys-rep
+*.nsys-rep
