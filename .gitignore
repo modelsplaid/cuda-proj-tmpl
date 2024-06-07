@@ -2,3 +2,4 @@ build*
 .ccls-cache
 .swp
 .run.sh.swp
+report1.nsys-rep

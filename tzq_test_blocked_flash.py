@@ -27,7 +27,7 @@ def test_block_flash_attn(seq_params=[(768,0)]):
     n_heads_kv = 32
     
 
-    atom_flash = BlockedFlashAttn(head_size, DtypeEnum.fp16)
+    #atom_flash = BlockedFlashAttn(head_size, DtypeEnum.fp16)
 
     q_block_size = get_q_block_size(head_size)
     kv_block_size = get_kv_block_size(head_size)
@@ -61,6 +61,16 @@ def test_block_flash_attn(seq_params=[(768,0)]):
                         dtype=torch.float16)
 
     atoms_host, n_atoms = atom_builder(atoms_host, batch, q_block_size, kv_block_size)
+    
+    # todo: test it when q, and kv are full 768
+    # todo: test it when q, and kv are full 768
+    # todo: test it when q, and kv are full 768   
+    # also this: 
+    #     // Number of tokens in the ragged batch associated with this atom.
+    # int32_t q_len;
+    
+    
+    
     
     # for i in range(n_atoms):
     #     atoms_host[i][6]=766
@@ -120,7 +130,7 @@ def test_prefill_decode(batch_sz = 1):
     return test_block_flash_attn(seq_params=params)
     
 if __name__ == "__main__":
-    batch_sz = 64
+    batch_sz = 12
     t_prefill=test_prefill(batch_sz)
     t_decode=test_decode(batch_sz)
     t_prefill_decode=test_prefill_decode(batch_sz)
